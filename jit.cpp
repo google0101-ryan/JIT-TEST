@@ -1,5 +1,6 @@
 #include "jit.h"
 #include "instructions.h"
+#include <bus.h>
 #include <sys/mman.h>
 
 #include <cstdio>
@@ -11,7 +12,7 @@
 
 State g_state;
 
-JIT::JIT(uint8_t* code_buf)
+JIT::JIT()
 {
 	base = (uint8_t*)mmap(nullptr, 0xffffffff, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
@@ -23,8 +24,6 @@ JIT::JIT(uint8_t* code_buf)
 
 	free_base = base;
 	code_used = 0;
-
-	guest_code = code_buf;
 }
 
 bool JIT::DoesOpcodeModifyPC(uint8_t op)
@@ -187,6 +186,12 @@ void JIT::EmitLoadAddress(const void* ptr)
 	instrs_compiled++;
 }
 
+void JIT::EmitCallRax()
+{
+	WriteU8(0xFF);
+	WriteU8(0xD0);
+}
+
 void JIT::EmitLdHlU16(uint16_t u16)
 {
 	printf("ld hl, 0x%04x\n", u16);
@@ -207,6 +212,8 @@ void JIT::EmitLdSpU16(uint16_t u16)
 
 void JIT::EmitLdHlA()
 {
+	WriteU8(0x90);
+
 	EmitLea(HostRegisters::RAX, offsetof(State, h));
 	EmitMovR8RegPointer(HostRegisters8::BH, HostRegisters::RAX);
 	
@@ -220,6 +227,9 @@ void JIT::EmitLdHlA()
 	EmitMovR8RegPointer(HostRegisters8::BL, HostRegisters::RAX);
 
 	EmitMovRegReg(HostRegisters::RSI, HostRegisters::RBX);
+
+	EmitLoadAddress(reinterpret_cast<const void*>(Bus::Write8));
+	EmitCallRax();
 }
 
 void JIT::EmitXorA()
@@ -240,7 +250,7 @@ bool JIT::CompileBlock(uint32_t start)
 	instrs_compiled = 0;
 
 	uint32_t cur = start;
-	uint8_t op = guest_code[cur++];
+	uint8_t op = Bus::Read8(cur++);
 	uint32_t free_off = 0;
 
 	EmitPushReg(HostRegisters::RSP);
@@ -250,31 +260,42 @@ bool JIT::CompileBlock(uint32_t start)
 			EmitPushReg(i);
 
 	EmitLoadAddress(reinterpret_cast<const void*>(&g_state));
+	EmitMovRegReg(HostRegisters::RBP, HostRegisters::RAX);
 
 	while (!DoesOpcodeModifyPC(op) && instrs_compiled < 50)
 	{
 	 	switch (static_cast<Instruction>(op))
 	 	{
-	 	// case Instruction::ld_hl_u16:
-	 	// 	EmitLdHlU16(*(uint16_t*)&guest_code[cur]);
-	 	// 	cur += 2;
-	 	// 	break;
-	 	// case Instruction::ld_sp_u16:
-	 	//  	EmitLdSpU16(*(uint16_t*)&guest_code[cur]);
-	 	//  	cur += 2;
-	 	//  	break;
-	 	// case Instruction::ld_hl_minus_a:
-	 	// 	EmitLdHlA();
-	 	// 	break;
-	 	// case Instruction::xor_a:
-	 	// 	EmitXorA();
-	 	// 	break;
+	 	case Instruction::ld_hl_u16:
+	 	 	EmitLdHlU16(Bus::Read16(cur));
+	 	 	cur += 2;
+	 	 	break;
+	 	case Instruction::ld_sp_u16:
+	 	  	EmitLdSpU16(Bus::Read16(cur));
+	 	  	cur += 2;
+	 	  	break;
+	 	case Instruction::ld_hl_minus_a:
+	 	 	EmitLdHlA();
+	 	 	break;
+	 	case Instruction::xor_a:
+	 	 	EmitXorA();
+	 	 	break;
+		case Instruction::prefix_cb:
+		{
+			op = Bus::Read8(cur++);
+			switch (op)
+			{
+			default:
+				printf("Unknown opcode 0xcb 0x%02x\n", op);
+				goto cleanup;
+			}
+		}
 	 	default:
 	 		printf("Unknown opcode 0x%02x\n", op);
 	 		goto cleanup;
 	 	}
 
-	 	op = guest_code[cur++];
+	 	op = Bus::Read8(cur++);
 	}
 
 cleanup:
@@ -284,7 +305,7 @@ cleanup:
 	
 	EmitPopReg(HostRegisters::RSP);
 
-	EmitMovRegImm(HostRegisters::RAX, 0x12345678);
+	EmitMovRegImm(HostRegisters::RAX, 0);
 
 	WriteU8(0xC3);
 

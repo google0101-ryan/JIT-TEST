@@ -21,6 +21,7 @@ enum class Instruction : uint8_t
 	ret_z = 0xC8,
 	ret = 0xC9,
 	jp_z_u16 = 0xCA,
+	prefix_cb = 0xCB,
 	call_z_u16 = 0xCC,
 	call_u16 = 0xCD,
 	rst_08 = 0xCF,

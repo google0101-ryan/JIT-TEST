@@ -23,7 +23,6 @@ private:
 	std::vector<JitBlock*> blocks;
 	uint8_t* base;
 	uint8_t* free_base;
-	uint8_t* guest_code;
 	uint32_t code_used;
 
 	uint32_t instrs_compiled = 0;
@@ -61,6 +60,8 @@ private:
 	void EmitMovRegImm(int reg, uint32_t imm);
 	// Set register to address of struct
 	void EmitLoadAddress(const void* ptr);
+	// Call the function pointed to by RAX
+	void EmitCallRax();
 
 	void WriteU8(uint8_t d) {*free_base++ = d;}
 	void WriteU16(uint16_t d) {WriteU8(d & 0xff); WriteU8(d >> 8);}
@@ -69,7 +70,7 @@ private:
 
 	using HostFunc = int (*)();
 public:
-	JIT(uint8_t* code_buf);
+	JIT();
 
 	bool CompileBlock(uint32_t start);
 };

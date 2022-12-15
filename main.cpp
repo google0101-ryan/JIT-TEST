@@ -1,4 +1,5 @@
 #include <jit.h>
+#include <bus.h>
 #include <fstream>
 
 int main()
@@ -12,7 +13,9 @@ int main()
 
 	file.read((char*)buf, size);
 
-	JIT* jit = new JIT(buf);
+	Bus::AttachBootROM(buf);
+
+	JIT* jit = new JIT();
 
 	jit->CompileBlock(0);
 
