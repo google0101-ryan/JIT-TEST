@@ -41,6 +41,11 @@ enum class Instruction : uint8_t
 	rst_38 = 0xFF
 };
 
+enum class CBInstructions : uint8_t
+{
+	bit_7_h = 0x7c,
+};
+
 enum HostRegisters
 {
 	RAX = 0,

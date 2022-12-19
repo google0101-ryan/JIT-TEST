@@ -26,6 +26,12 @@ JIT::JIT()
 	code_used = 0;
 }
 
+JIT::~JIT()
+{
+	if (base)
+		munmap(base, 0xffffffff);
+}
+
 bool JIT::DoesOpcodeModifyPC(uint8_t op)
 {
 	switch (static_cast<Instruction>(op))
@@ -192,9 +198,49 @@ void JIT::EmitCallRax()
 	WriteU8(0xD0);
 }
 
+void JIT::EmitIncAtAddr(int reg)
+{
+	WriteU8(0x66);
+	WriteU8(0xFF);
+	WriteU8(0 | reg);
+}
+
+void JIT::EmitAddAtAddr(int reg, uint16_t imm)
+{
+	WriteU8(0x66);
+	WriteU8(0x83);
+	WriteU8(0 | reg);
+	WriteU8(imm);
+}
+
+void JIT::EmitDec(int reg)
+{
+	WriteU8(0x48);
+	WriteU8(0xFF);
+	uint8_t modrm = 0xC8;
+	modrm |= reg;
+
+	WriteU8(modrm);
+}
+
+void JIT::EmitMovPtrReg8(int ptr_reg, int reg)
+{
+	WriteU8(0x88);
+	uint8_t modrm = 0;
+	modrm |= (reg << 3);
+	modrm |= (ptr_reg);
+	WriteU8(modrm);
+}
+
+void JIT::EmitJNZ(size_t off)
+{
+	WriteU8(0x75);
+	WriteU8(off);
+}
+
 void JIT::EmitLdHlU16(uint16_t u16)
 {
-	printf("ld hl, 0x%04x\n", u16);
+	//printf("ld hl, 0x%04x\n", u16);
 
 	EmitLea(HostRegisters::RAX, offsetof(State, h));
 	EmitMovRegAddress8(HostRegisters::RAX, (u16 >> 8));
@@ -204,7 +250,7 @@ void JIT::EmitLdHlU16(uint16_t u16)
 
 void JIT::EmitLdSpU16(uint16_t u16)
 {
-	printf("ld sp, 0x%04x\n", u16);
+	//printf("ld sp, 0x%04x\n", u16);
 
 	EmitLea(HostRegisters::RAX, offsetof(State, sp));
 	EmitMovRegAddress16(HostRegisters::RAX, u16);
@@ -212,7 +258,12 @@ void JIT::EmitLdSpU16(uint16_t u16)
 
 void JIT::EmitLdHlA()
 {
+	//printf("ld (hl-), a\n");
+
 	WriteU8(0x90);
+
+	EmitLea(HostRegisters::RAX, offsetof(State, a));
+	EmitMovR8RegPointer(HostRegisters8::BL, HostRegisters::RAX);
 
 	EmitLea(HostRegisters::RAX, offsetof(State, h));
 	EmitMovR8RegPointer(HostRegisters8::BH, HostRegisters::RAX);
@@ -223,13 +274,19 @@ void JIT::EmitLdHlA()
 	EmitMovRegReg(HostRegisters::RDI, HostRegisters::RBX);
 	EmitMovRegImm(HostRegisters::RBX, 0);
 
-	EmitLea(HostRegisters::RAX, offsetof(State, a));
-	EmitMovR8RegPointer(HostRegisters8::BL, HostRegisters::RAX);
-
 	EmitMovRegReg(HostRegisters::RSI, HostRegisters::RBX);
 
 	EmitLoadAddress(reinterpret_cast<const void*>(Bus::Write8));
 	EmitCallRax();
+
+	EmitDec(HostRegisters::RDI);
+	EmitMovRegReg(HostRegisters::RBX, HostRegisters::RDI);
+
+	EmitLea(HostRegisters::RAX, offsetof(State, h));
+	EmitMovPtrReg8(HostRegisters::RAX, HostRegisters8::BH);
+
+	EmitLea(HostRegisters::RAX, offsetof(State, l));
+	EmitMovPtrReg8(HostRegisters::RAX, HostRegisters8::BL);
 }
 
 void JIT::EmitXorA()
@@ -241,19 +298,102 @@ void JIT::EmitXorA()
 	EmitMovRegAddress8(HostRegisters::RAX, 0x40);
 }
 
-bool JIT::CompileBlock(uint32_t start)
+void JIT::EmitIncPC()
 {
+	EmitLea(HostRegisters::RAX, offsetof(State, pc));
+	EmitIncAtAddr(HostRegisters::RAX);
+}
+
+enum class InstrFlagType : uint32_t
+{
+	BIT = 0,
+};
+
+enum Flags
+{
+	CF = (1 << 4),
+	HC = (1 << 5),
+	SF = (1 << 6),
+	ZF = (1 << 7)
+};
+
+void SetFlag(Flags f, bool t)
+{
+	if (t)
+		g_state.f |= f;
+	else
+		g_state.f &= ~f;
+}
+
+static void CalculateFlags(uint8_t result, InstrFlagType flag_type)
+{
+	switch (flag_type)
+	{
+	case InstrFlagType::BIT:
+		SetFlag(ZF, result == 0);
+		SetFlag(SF, false);
+		SetFlag(HC, true);
+		break;
+	default:
+		printf("Unknown flag type %d\n", (int)flag_type);
+		exit(1);
+	}
+}
+
+void JIT::EmitBit7H()
+{
+	//printf("bit 7, h\n");
+
+	EmitLea(HostRegisters::RAX, offsetof(State, h));
+	EmitMovRegImm(HostRegisters::RBX, 0);
+	EmitMovR8RegPointer(HostRegisters8::BL, HostRegisters::RAX);
+
+	EmitMovRegReg(HostRegisters::RAX, HostRegisters::RBX);
+	EmitAndAlImm((1 << 7));
+	
+	EmitMovRegReg(HostRegisters::RDI, HostRegisters::RAX);
+	EmitMovRegImm(HostRegisters::RSI, static_cast<uint32_t>(InstrFlagType::BIT));
+
+	EmitLoadAddress(reinterpret_cast<void*>(CalculateFlags));
+	EmitCallRax();
+}
+
+void JIT::EmitJrNzi8(int8_t imm)
+{
+	//printf("jr nz, %d\n", imm);
+
+	EmitLea(HostRegisters::RAX, offsetof(State, f));
+	EmitMovRegImm(HostRegisters::RBX, 0);
+	EmitMovR8RegPointer(HostRegisters8::BL, HostRegisters::RAX);
+
+	EmitMovRegReg(HostRegisters::RAX, HostRegisters::RBX);
+	EmitAndAlImm(ZF);
+	EmitJNZ(8);
+
+	EmitLea(HostRegisters::RAX, offsetof(State, pc));
+	EmitAddAtAddr(HostRegisters::RAX, (int16_t)imm);
+}
+
+void JIT::CompileBlock(HostFunc& func)
+{
+	for (auto b : blocks)
+		if (b->guest_addr == g_state.pc)
+		{
+			func = (HostFunc)b->code;
+			return;
+		}
+
 	JitBlock* block = new JitBlock();
 	block->code = free_base;
-	block->guest_addr = start;
+	block->guest_addr = g_state.pc;
+	blocks.push_back(block);
 
 	instrs_compiled = 0;
 
-	uint32_t cur = start;
-	uint8_t op = Bus::Read8(cur++);
+	uint32_t cur = g_state.pc;
+	uint8_t op;
 	uint32_t free_off = 0;
-
-	EmitPushReg(HostRegisters::RSP);
+	uint8_t* b = free_base;
 
 	for (int i = 0; i < HostRegisters::HostRegCount; i++)
 		if (i != HostRegisters::RSP)
@@ -262,15 +402,26 @@ bool JIT::CompileBlock(uint32_t start)
 	EmitLoadAddress(reinterpret_cast<const void*>(&g_state));
 	EmitMovRegReg(HostRegisters::RBP, HostRegisters::RAX);
 
-	while (!DoesOpcodeModifyPC(op) && instrs_compiled < 50)
+	do
 	{
+	 	op = Bus::Read8(cur++);
+		EmitIncPC();
+
 	 	switch (static_cast<Instruction>(op))
 	 	{
+		case Instruction::jr_nz_i8:
+			EmitIncPC();
+			EmitJrNzi8(Bus::Read8(cur++));
+			break;
 	 	case Instruction::ld_hl_u16:
+			EmitIncPC();
+			EmitIncPC();
 	 	 	EmitLdHlU16(Bus::Read16(cur));
 	 	 	cur += 2;
 	 	 	break;
 	 	case Instruction::ld_sp_u16:
+			EmitIncPC();
+			EmitIncPC();
 	 	  	EmitLdSpU16(Bus::Read16(cur));
 	 	  	cur += 2;
 	 	  	break;
@@ -283,46 +434,40 @@ bool JIT::CompileBlock(uint32_t start)
 		case Instruction::prefix_cb:
 		{
 			op = Bus::Read8(cur++);
-			switch (op)
+			EmitIncPC();
+			switch (static_cast<CBInstructions>(op))
 			{
+			case CBInstructions::bit_7_h:
+				EmitBit7H();
+				break;
 			default:
-				printf("Unknown opcode 0xcb 0x%02x\n", op);
-				goto cleanup;
+				printf("Unknown opcode 0xcb 0x%02x (0x%04x)\n", op, cur - 1);
+				exit(1);
 			}
+			break;
 		}
 	 	default:
-	 		printf("Unknown opcode 0x%02x\n", op);
-	 		goto cleanup;
+	 		printf("Unknown opcode 0x%02x (0x%04x)\n", op, cur - 1);
+	 		exit(1);
 	 	}
+	} while (!DoesOpcodeModifyPC(op) && instrs_compiled < 50);
 
-	 	op = Bus::Read8(cur++);
-	}
-
-cleanup:
 	for (int i = HostRegisters::RDI; i >= 0; i--)
 		if (i != HostRegisters::RSP)
 			EmitPopReg(i);
-	
-	EmitPopReg(HostRegisters::RSP);
 
 	EmitMovRegImm(HostRegisters::RAX, 0);
 
 	WriteU8(0xC3);
 
-	HostFunc entry = (HostFunc)block->code;
-	int exit_code = entry();
-
 	std::ofstream file("out.bin");
 
-	for (int i = 0; i < (free_base - block->code); i++)
+	for (uint32_t i = 0; i < (free_base - block->code); i++)
 	{
-		file << block->code[i];
+		file << b[i];
 	}
 
 	file.close();
 
-	printf("Compiled %d blocks of code (result = 0x%x)\n", cur - start, exit_code);
-	printf("State: 0x%04x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x\n", g_state.sp,  g_state.a,  g_state.f,  g_state.b,  g_state.c,  g_state.d,  g_state.e,  g_state.h,  g_state.l);
-
-	return true;
+	func = (HostFunc)block->code;
 }

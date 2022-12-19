@@ -17,7 +17,13 @@ int main()
 
 	JIT* jit = new JIT();
 
-	jit->CompileBlock(0);
+	JIT::HostFunc func;
+	while (1)
+	{
+		jit->CompileBlock(func);
+
+		func();
+	}
 
 	printf("Done. Returning\n");
 

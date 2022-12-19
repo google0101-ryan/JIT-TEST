@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 
 struct JitBlock
@@ -15,7 +16,10 @@ struct State
 	uint16_t sp;
 	uint8_t a, b, c, d, e, h, l;
 	uint8_t f;
+	uint16_t pc;
 };
+
+extern State g_state;
 
 class JIT
 {
@@ -30,10 +34,16 @@ private:
 	bool DoesOpcodeModifyPC(uint8_t op);
 
 	// High level emitter stuff
+	void EmitJrNzi8(int8_t imm); // 0x20
 	void EmitLdHlU16(uint16_t u16); // 0x21
 	void EmitLdSpU16(uint16_t u16); // 0x31
 	void EmitLdHlA(); // 0x32
 	void EmitXorA(); // 0xAF
+
+	void EmitBit7H(); // 0x7C
+
+	// Mid-level emitter stuff
+	void EmitIncPC();
 
 	// Low level emitter stuff
 
@@ -62,15 +72,26 @@ private:
 	void EmitLoadAddress(const void* ptr);
 	// Call the function pointed to by RAX
 	void EmitCallRax();
+	// Emit jnz
+	void EmitJNZ(size_t address);
+	// Increment a value pointed to by a register
+	void EmitIncAtAddr(int reg);
+	// Add to a value pointed to by a register
+	void EmitAddAtAddr(int reg, uint16_t imm);
+	// Decrement a register
+	void EmitDec(int reg);
+	// Set a 16-bit value pointed to by a register to a register
+	void EmitMovPtrReg8(int ptr_reg, int reg);
 
 	void WriteU8(uint8_t d) {*free_base++ = d;}
 	void WriteU16(uint16_t d) {WriteU8(d & 0xff); WriteU8(d >> 8);}
 	void WriteU32(uint32_t d) {WriteU16(d & 0xffff); WriteU16(d >> 16);}
 	void WriteU64(uint64_t d) {WriteU32(d & 0xffffffff); WriteU32(d >> 32);}
-
-	using HostFunc = int (*)();
 public:
 	JIT();
+	~JIT();
+	
+	using HostFunc = int (*)();
 
-	bool CompileBlock(uint32_t start);
+	void CompileBlock(HostFunc& func);
 };

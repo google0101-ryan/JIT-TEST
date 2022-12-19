@@ -23,7 +23,7 @@ uint16_t Read16(uint16_t addr)
 
 void Write8(uint16_t addr, uint8_t data)
 {
-	if (addr > 0x8000 && addr <= 0x9fff)
+	if (addr >= 0x8000 && addr <= 0x9fff)
 	{
 		vram[addr - 0x8000] = data;
 		return;
